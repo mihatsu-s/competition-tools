@@ -8,7 +8,7 @@ class CppEnv(BaseEnv):
         return self.problem_name + ".cpp"
 
     def source_template(self):
-        return "#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n}"
+        return "#include <mihatsu/template/{}.hpp>\n\nint main() {{\n}}".format("atcoder" if self.on_atcoder() else "template")
 
     def exectable_filename(self):
         return "a.exe" if self.on_windows() else "a"
