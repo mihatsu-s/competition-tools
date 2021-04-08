@@ -1,2 +1,2 @@
-pyperclip~=1.0
-online-judge-api-client~=10.0.0
+pyperclip
+online-judge-api-client

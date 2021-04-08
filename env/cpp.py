@@ -37,5 +37,5 @@ class CppEnv(BaseEnv):
             expanded=self.submitted_file(),
             python=self.python_command(),
             expander=(Path(__file__) / "../../tools/cpp_expander.py").resolve(),
-            expander_option="-e '^(?:atcoder|boost)/'" if self.on_atcoder() else ""
+            expander_option="-e \"^(?:atcoder|boost)/\"" if self.on_atcoder() else ""
         )
