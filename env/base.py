@@ -1,5 +1,5 @@
 from abc import ABCMeta, abstractmethod
-from typing import List, final
+from typing import List
 import os
 from pathlib import Path
 import re
@@ -54,7 +54,7 @@ class BaseEnv(metaclass=ABCMeta):
                 file=self.submitted_file()
             )
         else:
-            return "{cat} {file} | {python} -m pyperclip --copy && echo 'Copied {file} to clipboard.'".format(
+            return "{cat} {file} | {python} -m pyperclip --copy && echo \"Copied {file} to clipboard.\"".format(
                 cat="type" if self.on_windows() else "cat",
                 python=self.python_command(),
                 file=self.submitted_file()
@@ -62,7 +62,7 @@ class BaseEnv(metaclass=ABCMeta):
 
     def opening_command(self) -> str:
         if self.problem_url:
-            return "{python} -m webbrowser '{url}' && code {file}".format(
+            return "{python} -m webbrowser {url} && code {file}".format(
                 python=self.python_command(),
                 url=self.problem_url,
                 file=self.source_filename()
