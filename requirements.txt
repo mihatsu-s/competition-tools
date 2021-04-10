@@ -1,2 +1,3 @@
 pyperclip
+online-judge-tools
 online-judge-api-client
