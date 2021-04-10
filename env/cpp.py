@@ -1,5 +1,6 @@
 from .base import BaseEnv
 from pathlib import Path
+import os
 
 
 class CppEnv(BaseEnv):
@@ -17,7 +18,7 @@ class CppEnv(BaseEnv):
         return [self.exectable_filename()]
 
     def test_command(self):
-        return "./" + self.exectable_filename()
+        return os.path.join(".", self.exectable_filename())
 
     def submitted_file(self):
         return "expanded.cpp"
