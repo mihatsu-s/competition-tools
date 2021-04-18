@@ -91,6 +91,7 @@ def generate_contest(contest_name: str, envs: List[Env], opening=False, auto_nam
 
 def submit(name: str, force: bool, *args):
     if (name != ""):
+        name = name.upper()
         if (is_task_directory()):
             os.chdir("..")
         os.chdir(name)
@@ -121,6 +122,7 @@ def test(idx: int, *args):
 
 
 def move(name: str):
+    name = name.upper()
     no_open = False
     if name[-1] == ":":
         name = name[:-1]
