@@ -58,6 +58,14 @@ def generate(x: str):
         generate_contest("contest" + str(i), envs,
                          opening=True, auto_naming=True)
     else:
+        sp = subprocess.run(["oj-api", "get-problem", x],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if (sp.returncode == 0):
+            name = get_name_from_url(x)
+            Env(name, x).prepare(directory=name, opening=True)
+            set_cd_path(name)
+            return
+
         sp = subprocess.run(["oj-api", "get-contest", x],
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if (sp.returncode == 0):
