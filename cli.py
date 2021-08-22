@@ -168,7 +168,7 @@ def main():
         command = args[0].lower()
         if command == "clean":
             clean()
-        elif command in ["g", "gen", "generate"]:
+        elif command in ["gen", "generate"]:
             generate(args[1])
         elif len(command) >= 1 and command[0] == ".":
             name = command[1:]
