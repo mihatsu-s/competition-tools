@@ -83,6 +83,8 @@ def generate(x: str):
             generate_contest(get_name_from_url(x), envs,
                              opening=True, auto_naming=auto_naming)
 
+        raise RuntimeError("Cannot generate environment for '{}'.".format(x))
+
 
 def generate_contest(contest_name: str, envs: List[Env], opening=False, auto_naming=False):
     os.mkdir(contest_name)
@@ -93,7 +95,8 @@ def generate_contest(contest_name: str, envs: List[Env], opening=False, auto_nam
         for i, env in enumerate(envs):
             env.problem_name = chr(ord("A") + i)
     for i, env in enumerate(envs):
-        env.prepare(directory=env.problem_name, opening=(i == 0), memo=envs[i + 1].problem_name if i + 1 < len(envs) else "")
+        env.prepare(directory=env.problem_name, opening=(i == 0),
+                    memo=envs[i + 1].problem_name if i + 1 < len(envs) else "")
     set_cd_path(os.path.join(contest_name, envs[0].problem_name))
 
 
@@ -102,7 +105,14 @@ def submit(name: str, force: bool, *args):
         name = name.upper()
         if (is_task_directory()):
             os.chdir("..")
-        os.chdir(name)
+        try:
+            os.chdir(name)
+        except Exception:
+            raise RuntimeError("Problem '{}' does not exist.".format(name))
+
+    if not is_task_directory():
+        raise RuntimeError("You are not in problem directory.")
+
     cmd = ["make", "_submit_force" if force else "_submit"]
     if len(args) > 0:
         cmd.append("TEST_ARGS=" + " ".join(args))
@@ -110,6 +120,9 @@ def submit(name: str, force: bool, *args):
 
 
 def test(idx: int, *args):
+    if not is_task_directory():
+        raise RuntimeError("You are not in problem directory.")
+
     cmd = ["make"]
     if idx == 0:
         cmd.append("_test")
@@ -138,7 +151,11 @@ def move(name: str):
 
     if (is_task_directory()):
         os.chdir("..")
-    os.chdir(name)
+
+    try:
+        os.chdir(name)
+    except Exception:
+        raise RuntimeError("Problem '{}' does not exist.".format(name))
 
     if not no_open:
         sp = subprocess.run(["make", "_open"])
@@ -162,8 +179,11 @@ def main():
     try:
         args = sys.argv[1:]
         if len(args) == 0:
-            subprocess.run(["make", "_exec"])
-            return
+            if Path(".problem").is_file():
+                subprocess.run(["make", "_exec"])
+                return
+            else:
+                args = ["help"]
 
         command = args[0].lower()
         if command == "clean":
@@ -181,6 +201,25 @@ def main():
             colon(*args[1:])
         elif re.match(r"^\d+$", command):
             test(int(command), *args[1:])
+        elif command == "help":
+            print("""Subcommands (general):
+  generate {number}\t\tGenerate an environment for an anonymous contest consisting of {number} problems. 
+  generate {problem-url}\tGenerate an environment for a specified problem.
+  generate {contest-url}\tGenerate an environment for a specified contest.
+  gen\t\t\t\tAlias for 'generate'.
+  help\t\t\t\tDisplay this information.
+
+Subcommands (in the generated environment):
+  {problem-name}\t\tSet the current problem to a specified problem.
+  (none)\t\t\tRun your program for the current problem.
+  0 [oj-test-arguments]\t\tRun all test cases.
+  {number}\t\t\tRun {number}-th test cases.
+  .\t\t\t\tTest and submit for the current problem.
+  .!\t\t\t\tSubmit for the current problem without testing.
+  .{problem-name}[!]\t\tSubmit for a specified problem.
+  :\t\t\t\tTest and submit for the current problem and go to the next problem.
+  clean\t\t\t\tRemove the current environment.
+""")
         else:
             move(command)
     except Exception as e:
