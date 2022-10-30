@@ -29,7 +29,7 @@ class CppEnv(BaseEnv):
     def additional_make_rules(self):
         return """
 {exe}: {src}
-\tg++ {src} -Wall -std=c++17 -DDEBUG -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -o {exe}
+\tg++ {src} -Wall -std=c++17 -DDEBUG -D_GLIBCXX_DEBUG -o {exe}
 {expanded}: {src}
 \t{python} {expander} {src} {expander_option} -o {expanded}
 """.format(
