@@ -29,9 +29,9 @@ class CppEnv(BaseEnv):
     def additional_make_rules(self):
         return """
 {exe}: {src}
-\tg++ {src} -Wall -std=c++17 -DDEBUG -D_GLIBCXX_DEBUG -o {exe}
+\tg++ "{src}" -Wall -std=c++17 -DDEBUG -D_GLIBCXX_DEBUG -o "{exe}"
 {expanded}: {src}
-\t{python} {expander} {src} {expander_option} -o {expanded}
+\t{python} "{expander}" "{src}" {expander_option} -o "{expanded}"
 """.format(
             src=self.source_filename(),
             exe=self.exectable_filename(),

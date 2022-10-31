@@ -33,6 +33,18 @@ def set_rm_path(x: str, directory=_init_wd):
         f.write(x)
 
 
+def get_oj_testcases() -> list[str]:
+    res: list[str] = []
+    test_dir = Path("test")
+    if (test_dir.is_dir()):
+        for f in test_dir.iterdir():
+            name = str(f)
+            if (re.search(r"\.in$", name)):
+                res.append(name)
+    res.sort()
+    return res
+
+
 def clean():
     cd_path = ".."
     rm_path = os.getcwd()
@@ -95,23 +107,27 @@ def generate_contest(contest_name: str, envs: List[Env], opening=False, auto_nam
         for i, env in enumerate(envs):
             env.problem_name = chr(ord("A") + i)
     for i, env in enumerate(envs):
-        env.prepare(directory=env.problem_name, opening=(i == 0),
+        env.prepare(directory=env.problem_name, opening=(i == 0) and opening,
                     memo=envs[i + 1].problem_name if i + 1 < len(envs) else "")
     set_cd_path(os.path.join(contest_name, envs[0].problem_name))
 
 
-def submit(name: str, force: bool, *args):
-    if (name != ""):
-        name = name.upper()
+def submit(problem_name: str, force: bool, *args):
+    if (problem_name != ""):
+        problem_name = problem_name.upper()
         if (is_task_directory()):
             os.chdir("..")
         try:
-            os.chdir(name)
+            os.chdir(problem_name)
         except Exception:
-            raise RuntimeError("Problem '{}' does not exist.".format(name))
+            raise RuntimeError("Problem '{}' does not exist.".format(problem_name))
 
     if not is_task_directory():
         raise RuntimeError("You are not in problem directory.")
+    
+    # do not run "oj test" if test case does not exist
+    if len(get_oj_testcases()) == 0:
+        force = True
 
     cmd = ["make", "_submit_force" if force else "_submit"]
     if len(args) > 0:
@@ -119,60 +135,74 @@ def submit(name: str, force: bool, *args):
     subprocess.run(cmd)
 
 
-def test(idx: int, *args):
+def test(test_case_index: int, *args):
     if not is_task_directory():
         raise RuntimeError("You are not in problem directory.")
 
     cmd = ["make"]
-    if idx == 0:
+    if test_case_index == 0:
         cmd.append("_test")
         if len(args) > 0:
             cmd.append("TEST_ARGS=" + " ".join(args))
     else:
         cmd.append("_exec_input")
-        test_files = []
-        test_dir = Path("test")
-        if (test_dir.is_dir()):
-            for f in test_dir.iterdir():
-                name = str(f)
-                if (re.search(r"\.in$", name)):
-                    test_files.append(name)
-        test_files.sort()
-        cmd.append("EXEC_INPUT=" + test_files[idx - 1])
+        test_files = get_oj_testcases()
+        cmd.append("EXEC_INPUT=" + test_files[test_case_index - 1])
     subprocess.run(cmd)
 
 
-def move(name: str):
-    name = name.upper()
-    no_open = False
-    if name[-1] == ":":
-        name = name[:-1]
-        no_open = True
+def go_to(problem_name: str, opening: bool = True):
+    problem_name = problem_name.upper()
 
     if (is_task_directory()):
         os.chdir("..")
 
     try:
-        os.chdir(name)
+        os.chdir(problem_name)
     except Exception:
-        raise RuntimeError("Problem '{}' does not exist.".format(name))
+        raise RuntimeError("Problem '{}' does not exist.".format(problem_name))
 
-    if not no_open:
+    sp_returncode = 0
+    if opening:
         sp = subprocess.run(["make", "_open"])
-    if (no_open or sp.returncode == 0):
+        sp_returncode = sp.returncode
+
+    if (sp_returncode == 0):
         set_cd_path(os.getcwd())
 
 
+# Submit current problem and go to next problem
 def colon(*args):
     if not is_task_directory():
         raise RuntimeError("You are not in problem directory.")
     s = ""
     with open(".problem") as f:
-        s = f.readline()
+        s = f.readline()  # next problem name
     if len(s):
-        move(s)
+        go_to(s)
     os.chdir(_init_wd)
     submit("", False, *args)
+
+
+def show_help():
+    print("""Subcommands (general):
+  generate {number}\t\tGenerate an environment for an anonymous contest consisting of {number} problems. 
+  generate {problem-url}\tGenerate an environment for a specified problem.
+  generate {contest-url}\tGenerate an environment for a specified contest.
+  gen\t\t\t\tAlias for 'generate'.
+  help\t\t\t\tDisplay this information.
+
+Subcommands (in the generated environment):
+  {problem-name}\t\tSet the current problem to a specified problem.
+  (none)\t\t\tRun your program for the current problem.
+  0 [oj-test-arguments]\t\tRun all test cases.
+  {number}\t\t\tRun {number}-th test cases.
+  .\t\t\t\tTest and submit for the current problem.
+  .!\t\t\t\tSubmit for the current problem without testing.
+  .{problem-name}[!]\t\tSubmit for a specified problem.
+  :\t\t\t\tTest and submit for the current problem and go to the next problem.
+  clean\t\t\t\tRemove the current environment.
+""")
 
 
 def main():
@@ -202,26 +232,14 @@ def main():
         elif re.match(r"^\d+$", command):
             test(int(command), *args[1:])
         elif command == "help":
-            print("""Subcommands (general):
-  generate {number}\t\tGenerate an environment for an anonymous contest consisting of {number} problems. 
-  generate {problem-url}\tGenerate an environment for a specified problem.
-  generate {contest-url}\tGenerate an environment for a specified contest.
-  gen\t\t\t\tAlias for 'generate'.
-  help\t\t\t\tDisplay this information.
-
-Subcommands (in the generated environment):
-  {problem-name}\t\tSet the current problem to a specified problem.
-  (none)\t\t\tRun your program for the current problem.
-  0 [oj-test-arguments]\t\tRun all test cases.
-  {number}\t\t\tRun {number}-th test cases.
-  .\t\t\t\tTest and submit for the current problem.
-  .!\t\t\t\tSubmit for the current problem without testing.
-  .{problem-name}[!]\t\tSubmit for a specified problem.
-  :\t\t\t\tTest and submit for the current problem and go to the next problem.
-  clean\t\t\t\tRemove the current environment.
-""")
+            show_help()
         else:
-            move(command)
+            problem_name = command
+            opening: bool = True
+            if len(problem_name) >= 1 and problem_name[-1] == ":":
+                problem_name = problem_name[:-1]
+                opening = False
+            go_to(problem_name, opening)
     except Exception as e:
         print(e, file=sys.stderr)
         exit(1)
