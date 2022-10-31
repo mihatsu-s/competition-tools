@@ -42,6 +42,9 @@ class BaseEnv(metaclass=ABCMeta):
 
     def python_command(self) -> str:
         return "py" if self.on_windows() else "python3"
+    
+    def cat_command(self) -> str:
+        return "type" if self.on_windows() else "cat"
 
     def can_submit_by_oj(self) -> bool:
         return re.search(r"(?:atcoder\.jp|codeforces\.com|yukicoder\.me|hackerrank\.com|toph\.co)/", self.problem_url) is not None
@@ -54,7 +57,7 @@ class BaseEnv(metaclass=ABCMeta):
             )
         else:
             return '{cat} "{file}" | {python} -m pyperclip --copy && echo "Copied {file} to clipboard."'.format(
-                cat="type" if self.on_windows() else "cat",
+                cat=self.cat_command(),
                 python=self.python_command(),
                 file=self.submitted_file()
             )
@@ -71,6 +74,8 @@ class BaseEnv(metaclass=ABCMeta):
 
     def generate_makefile(self) -> str:
         return """
+{shell_specifier}
+
 _open:
 \t{open}
 _test: {test_dep}
@@ -85,10 +90,11 @@ _submit_force: {submitted_file}
 \t{submit}
 {additional}
 """.format(
+            shell_specifier="SHELL=cmd" if self.on_windows() else "",
             open=self.opening_command(),
             test_dep=" ".join(self.test_dependencies()),
             test=self.test_command().replace('"', r'"\""'),
-            cat="type" if self.on_windows() else "cat",
+            cat=self.cat_command(),
             submitted_file=self.submitted_file(),
             submit=self.submission_command(),
             additional=self.additional_make_rules()
