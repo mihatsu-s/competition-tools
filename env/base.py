@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import webbrowser
 
 
 class BaseEnv(metaclass=ABCMeta):
@@ -49,12 +48,12 @@ class BaseEnv(metaclass=ABCMeta):
 
     def submission_command(self) -> str:
         if self.can_submit_by_oj():
-            return "oj submit -y {url} {file}".format(
+            return 'oj submit -y "{url}" "{file}"'.format(
                 url=self.problem_url,
                 file=self.submitted_file()
             )
         else:
-            return "{cat} {file} | {python} -m pyperclip --copy && echo \"Copied {file} to clipboard.\"".format(
+            return '{cat} "{file}" | {python} -m pyperclip --copy && echo "Copied {file} to clipboard."'.format(
                 cat="type" if self.on_windows() else "cat",
                 python=self.python_command(),
                 file=self.submitted_file()
