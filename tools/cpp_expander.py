@@ -26,13 +26,15 @@ re_include2 = re.compile(r'^#include<([^"]*)>$')
 
 def _expand_core(
         source_path: Path,
-        expanded: Set[Union[Path, str]],
+        parent_files: Set[Path],
         outfile: TextIO,
         exclude_pattern: Optional[Pattern[str]] = None
 ) -> None:
-    if (source_path in expanded):
+    # !!!!  "#pragma once" is not supported  !!!!
+
+    if (source_path in parent_files):
         return
-    expanded.add(source_path)
+    parent_files.add(source_path)
 
     with open(source_path, "r") as source:
         in_block_comment = False
@@ -63,35 +65,28 @@ def _expand_core(
                             in_string = True
 
             match1 = re_include1.match(code)
-            target: Optional[str] = None
-            next_path: Optional[Path] = None
+            include_target: Optional[str] = None
+            next_include_path: Optional[Path] = None
             if match1:
-                next_path = source_path.parent.joinpath(match1[1])
-                if not next_path.is_file():
-                    next_path = None
-                    target = match1[1]
+                next_include_path = source_path.parent.joinpath(match1[1])
+                if not next_include_path.is_file():
+                    next_include_path = None
+                    include_target = match1[1]
             else:
                 match2 = re_include2.match(code)
                 if match2:
-                    target = match2[1]
+                    include_target = match2[1]
 
-            no_include = False
+            if next_include_path is None and include_target:
+                if not (exclude_pattern and exclude_pattern.search(include_target) is not None):
+                    next_include_path = resolve_include_path(include_target)
 
-            if target:
-                if target in expanded:
-                    no_include = True
-                else:
-                    if not (exclude_pattern and exclude_pattern.search(target) is not None):
-                        next_path = resolve_include_path(target)
-                    if next_path is None:
-                        expanded.add(target)
-
-            if no_include:
-                pass
-            elif next_path:
-                _expand_core(next_path, expanded, outfile, exclude_pattern)
+            if next_include_path:
+                _expand_core(next_include_path, parent_files, outfile, exclude_pattern)
             else:
                 outfile.write(line)
+
+    parent_files.discard(source_path)
 
 
 def expand(
