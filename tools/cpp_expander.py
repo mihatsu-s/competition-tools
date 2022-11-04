@@ -1,4 +1,4 @@
-from typing import TextIO, Set, Optional, Union, Pattern
+from typing import TextIO, Optional, Pattern, List
 from pathlib import Path
 import os
 import re
@@ -6,96 +6,138 @@ import sys
 from argparse import ArgumentParser
 
 
-cplus_include_paths = []
-for path in (os.environ.get("CPLUS_INCLUDE_PATH") or "").split(os.pathsep):
-    if path:
-        cplus_include_paths.append(Path(path).resolve())
+class CppLineReader:
+    class LineInfo:
+        def __init__(self, raw: str = "", code: str = ""):
+            self.raw = raw
+            self.code = code
 
-
-def resolve_include_path(target: str) -> Optional[Path]:
-    for base in cplus_include_paths:
-        path = base.joinpath(target)
-        if path.is_file():
-            return path
-    return None
-
-
-re_include1 = re.compile(r'^#include"([^>]*)"$')
-re_include2 = re.compile(r'^#include<([^"]*)>$')
-
-
-def _expand_core(
-        source_path: Path,
-        parent_files: Set[Path],
-        outfile: TextIO,
-        exclude_pattern: Optional[Pattern[str]] = None
-) -> None:
-    # !!!!  "#pragma once" is not supported  !!!!
-
-    if (source_path in parent_files):
-        return
-    parent_files.add(source_path)
-
-    with open(source_path, "r") as source:
+    @staticmethod
+    def read(source: TextIO):
+        in_string = False
         in_block_comment = False
+        info = CppLineReader.LineInfo()
         for line in source:
-            code = ""
-            next_skip = False
-            in_string = False
-            for i in range(len(line)):
-                if next_skip:
-                    next_skip = False
+            skipping = 0
+            continue_to_next_line = False
+            for p in range(len(line)):
+                if skipping > 0:
+                    skipping -= 1
                 elif in_string:
-                    code += line[i]
-                    if (line[i] == "\""):
+                    if line[p:p+2] == r'\"':
+                        skipping = 1
+                        info.code += line[p:p+2]
+                    elif line[p] == '"':
                         in_string = False
+                        info.code += line[p]
+                    else:
+                        info.code += line[p]
                 elif in_block_comment:
-                    if (line[i:i+2] == "*/"):
+                    if line[p:p+2] == "*/":
+                        skipping = 1
                         in_block_comment = False
-                        next_skip = True
                 else:
-                    if (line[i:i+2] == "//"):
-                        break
-                    elif (line[i:i+2] == "/*"):
+                    if line[p] == '"':
+                        in_string = True
+                        info.code += line[p]
+                    elif line[p:p+2] == "/*":
+                        skipping = 1
                         in_block_comment = True
-                        next_skip = True
-                    elif (line[i] != " " and line[i] != "\t"):
-                        code += line[i]
-                        if (line[i] == "\""):
-                            in_string = True
+                    elif line[p:p+2] == "//":
+                        info.code += "\n"
+                        break
+                    elif line[p:] == "\\\n" or line[p:] == "\\\r\n":
+                        continue_to_next_line = True
+                        break
+                    else:
+                        info.code += line[p]
 
-            match1 = re_include1.match(code)
-            include_target: Optional[str] = None
-            next_include_path: Optional[Path] = None
-            if match1:
-                next_include_path = source_path.parent.joinpath(match1[1])
-                if not next_include_path.is_file():
-                    next_include_path = None
-                    include_target = match1[1]
-            else:
-                match2 = re_include2.match(code)
-                if match2:
-                    include_target = match2[1]
+            info.raw += line
+            if not in_block_comment and not continue_to_next_line:
+                yield info
+                info = CppLineReader.LineInfo()
 
-            if next_include_path is None and include_target:
-                if not (exclude_pattern and exclude_pattern.search(include_target) is not None):
-                    next_include_path = resolve_include_path(include_target)
-
-            if next_include_path:
-                _expand_core(next_include_path, parent_files, outfile, exclude_pattern)
-            else:
-                outfile.write(line)
-
-    parent_files.discard(source_path)
+        if info.raw != "":
+            yield info
 
 
-def expand(
-        source_path: str,
-        outfile: TextIO,
-        exclude_pattern: Optional[Pattern[str]] = None
-) -> None:
-    _expand_core(Path(source_path).resolve(),
-                 set(), outfile, exclude_pattern)
+class CppDirectiveReader:
+    re_space = re.compile(r'(?:^\s*|(?<=[\s#])\s*|[\s\r\n]*$)')
+
+    @staticmethod
+    def remove_space(codeline: str) -> str:
+        return CppDirectiveReader.re_space.sub("", codeline)
+
+    re_include = re.compile(r'^#include\s*(["<])([^">]*)')
+
+    class IncludeDirective:
+        def __init__(self, target: str, quote: bool = False):
+            self.target = target
+            self.quote = quote
+
+    @staticmethod
+    def read(codeline: str):
+        codeline = CppDirectiveReader.remove_space(codeline)
+
+        match_include = CppDirectiveReader.re_include.search(codeline)
+        if match_include is not None:
+            return CppDirectiveReader.IncludeDirective(match_include[2], match_include[1] == '"')
+
+        return None
+
+
+class CppExpander:
+    def __init__(
+            self,
+            source_path: str,
+            outfile: TextIO,
+            exclude_pattern: Optional[Pattern[str]] = None):
+
+        self.source_path = Path(source_path).resolve()
+        self.outfile = outfile
+        self.exclude_pattern: Optional[Pattern[str]] = None
+        if exclude_pattern is not None:
+            self.exclude_pattern = re.compile(exclude_pattern)
+
+    @staticmethod
+    def get_cplus_include_path_from_env() -> List[Path]:
+        dirs: List[Path] = []
+        for path in (os.environ.get("CPLUS_INCLUDE_PATH") or "").split(os.pathsep):
+            if path:
+                dirs.append(Path(path).resolve())
+        return dirs
+
+    def resolve_include_path(self, target: str, basepath: Optional[Path] = None) -> Optional[Path]:
+        if basepath is not None:
+            while basepath.parent != basepath:
+                basepath = basepath.parent
+                file = basepath.joinpath(target).resolve()
+                if file.is_file():
+                    return file
+
+        if not hasattr(self, "include_dirs"):
+            self.include_dirs = CppExpander.get_cplus_include_path_from_env()
+
+        for dir in self.include_dirs:
+            file = dir.joinpath(target).resolve()
+            if file.is_file():
+                return file
+
+        return None
+
+    def __call__(self):
+        return self.expand(self.source_path)
+
+    def expand(self, source_path: Path):
+        with open(source_path, "r") as source:
+            for line in CppLineReader.read(source):
+                directive = CppDirectiveReader.read(line.code)
+                if isinstance(directive, CppDirectiveReader.IncludeDirective):
+                    target = self.resolve_include_path(directive.target, source_path if directive.quote else None)
+                    if target is not None:
+                        self.expand(target)
+                        continue
+                self.outfile.write(line.raw)
 
 
 def main():
@@ -105,12 +147,11 @@ def main():
     parser.add_argument("-e", "--exclude", help="prevent specific pattern from being expanded")
     args = parser.parse_args()
 
-    exclude = None if args.exclude is None else re.compile(args.exclude)
     if args.out is None:
-        expand(args.file, sys.stdout, exclude)
+        CppExpander(args.file, sys.stdout, args.exclude)()
     else:
-        with open(args.out, "w") as f:
-            expand(args.file, f, exclude)
+        with open(args.out, "w") as outfile:
+            CppExpander(args.file, outfile, args.exclude)()
 
 
 if __name__ == "__main__":
