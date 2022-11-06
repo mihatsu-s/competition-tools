@@ -1,4 +1,4 @@
-from typing import TextIO, Optional, Pattern, List, Iterable
+from typing import TextIO, Optional, Pattern, List, Iterable, Set, Union
 from pathlib import Path
 import os
 import re
@@ -8,7 +8,10 @@ from hashlib import sha256
 
 
 class CppLineReader:
+    """ Convert plain C++ code to syntactic lines """
+
     def __init__(self, source: Iterable[str]):
+        """ `source` must be iterated line by line (e.g. `io.StringIO` object) """
         self.source = source
 
     def __iter__(self):
@@ -115,10 +118,14 @@ class CppDirective:
 
         @staticmethod
         def parse(arg: str):
-            return CppDirective.Include(
-                target=arg[1:-1],
-                quote=arg[0] == '"'
-            )
+            quote: bool
+            if arg[0] == '"' and arg[-1] == '"':
+                quote = True
+            elif arg[0] == '<' and arg[-1] == '>':
+                quote = False
+            else:
+                raise ValueError("cannot parse '#include {}'".format(arg))
+            return CppDirective.Include(arg[1:-1], quote)
 
         def __str__(self):
             return "#include {}{}{}".format(
@@ -127,7 +134,10 @@ class CppDirective:
                 '"' if self.quote else '>'
             )
 
-    class Define:
+    class Base:  # label
+        pass
+
+    class Define(Base):
         def __init__(self, identifier: str, args: List[str], code: str):
             self.identifier = identifier
             self.args = args
@@ -139,7 +149,7 @@ class CppDirective:
         def parse(arg: str):
             match = CppDirective.Define._re_parse.match(arg)
             if match is None:
-                raise ValueError('cannot parse "{}"'.format(str))
+                raise ValueError("cannot parse '#define {}'".format(arg))
             return CppDirective.Define(
                 identifier=match[1],
                 args=CppDirective._remove_space(match[2][1:-1]).split(",") if match[2] else [],
@@ -153,69 +163,76 @@ class CppDirective:
                 " " + self.code if self.code else ""
             )
 
-    class Undef:
+    class Undef(Base):
         def __init__(self, identifier: str):
             self.identifier = identifier
 
         def __str__(self):
             return "#undef " + self.identifier
 
-    class Pragma:
+    class Pragma(Base):
         def __init__(self, command: str):
             self.command = command
 
         def __str__(self):
             return "#pragma " + self.command
 
-    class If:
+    class IfLike(Base):  # label
+        pass
+
+    class If(IfLike):
         def __init__(self, expression: str):
             self.expression = expression
 
         def __str__(self):
             return "#if " + self.expression
 
-    class Ifdef:
+    class Ifdef(IfLike):
         def __init__(self, identifier: str):
             self.identifier = identifier
 
         def __str__(self):
             return "#ifdef " + self.identifier
 
-    class Ifndef:
+    class Ifndef(IfLike):
         def __init__(self, identifier: str):
             self.identifier = identifier
 
         def __str__(self):
             return "#ifndef " + self.identifier
 
-    class Elif:
+    class Elif(Base):
         def __init__(self, expression: str):
             self.expression = expression
 
         def __str__(self):
             return "#undef " + self.expression
 
-    class Else:
+    class Else(Base):
         def __str__(self):
             return "#else"
 
-    class Endif:
+    class Endif(Base):
         def __str__(self):
             return "#endif"
 
 
 class CppDirectiveTranslator:
-    """ #elif -> #else + #if and so on """
+    """ `#elif` -> `#else` + `#if` and so on """
 
     def __init__(self, codelines: Iterable[str], path: Optional[Path] = None):
         self.codelines = codelines
         self.path = path
 
-        self._endif_duplication_count: List[int] = []
+        self._ifblocks: List[CppDirectiveTranslator.IfBlock] = []
         self._include_guard_emulation = False
 
     def __iter__(self):
         yield from self()
+
+    class IfBlock:
+        def __init__(self):
+            self.endif_duplication = 0
 
     _re_ifdef = re.compile(r'^[\(\s]*(!|)[\(\s]*defined\s*\(\s*([^\s\)]+)[\s\)]*$')
 
@@ -227,16 +244,26 @@ class CppDirectiveTranslator:
                 continue
 
             #  #elif -> #else + #if
-            if isinstance(directive, CppDirective.Elif):
+            if isinstance(directive, CppDirective.IfLike):
+                self._ifblocks.append(CppDirectiveTranslator.IfBlock())
+
+            elif isinstance(directive, CppDirective.Elif):
+                if len(self._ifblocks) == 0:
+                    raise ValueError("#elif without #if")
                 yield CppDirective.Else()
                 directive = CppDirective.If(directive.expression)
-                self._endif_duplication_count[-1] += 1
-            elif isinstance(directive, (CppDirective.If, CppDirective.Ifdef, CppDirective.Ifndef)):
-                self._endif_duplication_count.append(0)
+                self._ifblocks[-1].endif_duplication += 1
+
+            elif isinstance(directive, CppDirective.Else):
+                if len(self._ifblocks) == 0:
+                    raise ValueError("#else without #if")
+
             elif isinstance(directive, CppDirective.Endif):
-                for _ in range(self._endif_duplication_count[-1]):
+                if len(self._ifblocks) == 0:
+                    raise ValueError("#endif without #if")
+                for _ in range(self._ifblocks[-1].endif_duplication):
                     yield CppDirective.Endif()
-                self._endif_duplication_count.pop()
+                self._ifblocks.pop()
 
             #  #if defined -> #ifdef
             if isinstance(directive, CppDirective.If):
@@ -249,26 +276,57 @@ class CppDirectiveTranslator:
 
             #  #pragma once -> (include guard by macro)
             if isinstance(directive, CppDirective.Pragma) and directive.command == "once":
-                if len(self._endif_duplication_count) == 0:  # not in #if block
+                if len(self._ifblocks) == 0:  # not in #if block
                     if not self._include_guard_emulation and self.path:
-                        macro_name = "_CPPEXPANDER_" + sha256(str(self.path).encode()).hexdigest()[:16]
+                        macro_name = "_CPPEXPANDER_" + sha256(str(self.path).encode()).hexdigest()[:16].upper()
                         yield CppDirective.Ifndef(macro_name)
                         directive = CppDirective.Define(macro_name, [], "")
                         self._include_guard_emulation = True
 
             yield directive
-        
+
         if self._include_guard_emulation:
             yield CppDirective.Endif()
 
 
-class CppExpander:
-    def __init__(
-            self,
-            source_path: str,
-            outfile: TextIO,
-            exclude_pattern: Optional[Pattern[str]] = None):
+class MacroContext:
+    def __init__(self,
+                 _defined: Optional[Set[str]] = None,
+                 _not_defined: Optional[Set[str]] = None):
+        self._defined: Set[str] = _defined or set()
+        self._not_defined: Set[str] = _not_defined or set()
 
+    def copy(self):
+        return MacroContext(self._defined.copy(), self._not_defined.copy())
+
+    def define(self, macro_name: str):
+        self._defined.add(macro_name)
+        self._not_defined.discard(macro_name)
+
+    def undef(self, macro_name: str):
+        self._not_defined.add(macro_name)
+        self._defined.discard(macro_name)
+
+    def is_defined(self, macro_name: str) -> Optional[bool]:
+        if macro_name in self._defined:
+            return True
+        elif macro_name in self._not_defined:
+            return False
+        else:
+            return None
+
+    def merge(self, o: "MacroContext"):
+        return MacroContext(
+            self._defined & o._defined,
+            self._not_defined & o._not_defined
+        )
+
+
+class CppExpander:
+    def __init__(self,
+                 source_path: str,
+                 outfile: TextIO,
+                 exclude_pattern: Optional[Pattern[str]] = None):
         self.source_path = Path(source_path).resolve()
         self.outfile = outfile
         self.exclude_pattern: Optional[Pattern[str]] = None
@@ -301,28 +359,123 @@ class CppExpander:
 
         return None
 
+    class IfBlock:
+        def __init__(self, directive: CppDirective.IfLike):
+            self.directive = directive
+            self.current = True
+
+    class UndeterminedIfBlock(IfBlock):
+        def __init__(self, directive: CppDirective.IfLike, context: MacroContext):
+            super().__init__(directive)
+            self.contexts = [context.copy(), context]  # (false block context, true block context)
+            if isinstance(directive, CppDirective.Ifdef):
+                self.contexts[True].define(directive.identifier)
+                self.contexts[False].undef(directive.identifier)
+            elif isinstance(directive, CppDirective.Ifndef):
+                self.contexts[True].undef(directive.identifier)
+                self.contexts[False].define(directive.identifier)
+
+    class DeterminedIfBlock(IfBlock):
+        def __init__(self, directive: CppDirective.IfLike, determined: bool):
+            super().__init__(directive)
+            self.determined = determined
+
+    def is_determined(self, directive: CppDirective.IfLike, context: Optional[MacroContext] = None) -> Optional[bool]:
+        """ check if given #if block can be determined in the context """
+        if context is None:
+            context = self.context
+
+        if isinstance(directive, CppDirective.Ifdef) and context.is_defined(directive.identifier) is not None:
+            return context.is_defined(directive.identifier)
+        elif isinstance(directive, CppDirective.Ifndef) and context.is_defined(directive.identifier) is not None:
+            return not context.is_defined(directive.identifier)
+        else:
+            return None
+
     def __call__(self):
+        self.context = MacroContext()
+        self.ifblocks: List[CppExpander.IfBlock] = []
+        self.in_unreachable_block = False
         return self.expand(self.source_path)
 
     def expand(self, source_path: Path):
         with open(source_path, "r") as source:
-            for line in CppDirectiveTranslator(CppLineReader(source), source_path):
+            directive_translator = CppDirectiveTranslator(CppLineReader(source), source_path)
+            for line in directive_translator():
 
-                if isinstance(line, CppDirective.Include):
-                    target = self.resolve_include_path(line.target, source_path if line.quote else None)
-                    if target is not None:
-                        self.expand(target)
-                        continue
+                no_output = False
 
-                self.outfile.write(str(line))
-                self.outfile.write("\n")
+                if isinstance(line, CppDirective.IfLike):
+                    if self.in_unreachable_block:
+                        self.ifblocks.append(CppExpander.IfBlock(line))  # no operation
+                    else:
+                        determined = self.is_determined(line)
+                        if determined is not None:
+                            self.ifblocks.append(CppExpander.DeterminedIfBlock(line, determined))
+                            self.in_unreachable_block = (determined == False)
+                            no_output = True
+                        else:
+                            ifblock_undet = CppExpander.UndeterminedIfBlock(line, self.context)
+                            self.ifblocks.append(ifblock_undet)
+                            self.context = ifblock_undet.contexts[True]
+
+                elif isinstance(line, CppDirective.Else):
+                    ifblock = self.ifblocks[-1]
+                    ifblock.current = False
+                    if isinstance(ifblock, CppExpander.UndeterminedIfBlock):
+                        self.context = ifblock.contexts[False]
+                    elif isinstance(ifblock, CppExpander.DeterminedIfBlock):
+                        self.in_unreachable_block = (determined == True)
+                        no_output = True
+
+                elif isinstance(line, CppDirective.Endif):
+                    ifblock = self.ifblocks.pop()
+
+                    if isinstance(ifblock, CppExpander.UndeterminedIfBlock):
+                        #  #ifndefのtrueブロックで分岐条件のマクロが定義され，かつfalseブロックが存在しない場合，当該マクロをインクルードガードとして取り扱う．
+                        if isinstance(ifblock.directive, CppDirective.Ifndef) \
+                                and ifblock.contexts[True].is_defined(ifblock.directive.identifier) \
+                                and ifblock.current == True:
+                            # インクルードガード終了後は特例としてtrueブロックのコンテキストを引き継ぐ
+                            # （したがって，このtrueブロックが有効にならないような環境では展開されたコードを使用できない）
+                            self.context = ifblock.contexts[True].copy()
+                        else:
+                            self.context = ifblock.contexts[True].merge(ifblock.contexts[False])
+
+                        for parent_ifblock in reversed(self.ifblocks):
+                            if (isinstance(parent_ifblock, CppExpander.UndeterminedIfBlock)):
+                                parent_ifblock.contexts[parent_ifblock.current] = self.context
+
+                    elif isinstance(ifblock, CppExpander.DeterminedIfBlock):
+                        self.in_unreachable_block = False  # because DeterminedIfBlock does not appear in unreachable block
+                        no_output = True
+
+                if self.in_unreachable_block:
+                    continue
+
+                if isinstance(line, CppDirective.Define):
+                    self.context.define(line.identifier)
+
+                elif isinstance(line, CppDirective.Undef):
+                    self.context.undef(line.identifier)
+
+                elif isinstance(line, CppDirective.Include):
+                    if not (self.exclude_pattern and self.exclude_pattern.search(line.target)):
+                        target = self.resolve_include_path(line.target, source_path if line.quote else None)
+                        if target is not None:
+                            self.expand(target)
+                            continue
+
+                if not no_output:
+                    self.outfile.write(str(line))
+                    self.outfile.write("\n")
 
 
 def main():
-    parser = ArgumentParser()
-    parser.add_argument("file")
+    parser = ArgumentParser(description="Expand #include in C++ source file.")
+    parser.add_argument("file", help="C++ source file")
     parser.add_argument("-o", "--out", help="output file (default: stdout)")
-    parser.add_argument("-e", "--exclude", help="prevent specific pattern from being expanded")
+    parser.add_argument("-e", "--exclude", help="prevent specific pattern from being expanded (by regular expression)")
     args = parser.parse_args()
 
     if args.out is None:
