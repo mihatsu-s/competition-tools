@@ -33,8 +33,8 @@ def set_rm_path(x: str, directory=_init_wd):
         f.write(x)
 
 
-def get_oj_testcases() -> list[str]:
-    res: list[str] = []
+def get_oj_testcases() -> List[str]:
+    res: List[str] = []
     test_dir = Path("test")
     if (test_dir.is_dir()):
         for f in test_dir.iterdir():
