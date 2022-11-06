@@ -225,7 +225,7 @@ class CppDirectiveTranslator:
         self.path = path
 
         self._ifblocks: List[CppDirectiveTranslator.IfBlock] = []
-        self._include_guard_emulation = False
+        self._include_guard_macro_name: Optional[str] = None
 
     def __iter__(self):
         yield from self()
@@ -277,15 +277,14 @@ class CppDirectiveTranslator:
             #  #pragma once -> (include guard by macro)
             if isinstance(directive, CppDirective.Pragma) and directive.command == "once":
                 if len(self._ifblocks) == 0:  # not in #if block
-                    if not self._include_guard_emulation and self.path:
-                        macro_name = "_CPPEXPANDER_" + sha256(str(self.path).encode()).hexdigest()[:16].upper()
-                        yield CppDirective.Ifndef(macro_name)
-                        directive = CppDirective.Define(macro_name, [], "")
-                        self._include_guard_emulation = True
+                    if not self._include_guard_macro_name and self.path:
+                        self._include_guard_macro_name = "_CPPEXPANDER_" + sha256(str(self.path).encode()).hexdigest()[:16].upper()
+                        yield CppDirective.Ifndef(self._include_guard_macro_name)
+                        directive = CppDirective.Define(self._include_guard_macro_name, [], "")
 
             yield directive
 
-        if self._include_guard_emulation:
+        if self._include_guard_macro_name:
             yield CppDirective.Endif()
 
 
@@ -363,6 +362,7 @@ class CppExpander:
         def __init__(self, directive: CppDirective.IfLike):
             self.directive = directive
             self.current = True
+            self.no_output = False
 
     class UndeterminedIfBlock(IfBlock):
         def __init__(self, directive: CppDirective.IfLike, context: MacroContext):
@@ -379,6 +379,7 @@ class CppExpander:
         def __init__(self, directive: CppDirective.IfLike, determined: bool):
             super().__init__(directive)
             self.determined = determined
+            self.no_output = True
 
     def is_determined(self, directive: CppDirective.IfLike, context: Optional[MacroContext] = None) -> Optional[bool]:
         """ check if given #if block can be determined in the context """
@@ -418,6 +419,9 @@ class CppExpander:
                             ifblock_undet = CppExpander.UndeterminedIfBlock(line, self.context)
                             self.ifblocks.append(ifblock_undet)
                             self.context = ifblock_undet.contexts[True]
+                            if isinstance(line, CppDirective.Ifndef) and line.identifier == directive_translator._include_guard_macro_name:
+                                ifblock_undet.no_output = True
+                                no_output = True
 
                 elif isinstance(line, CppDirective.Else):
                     ifblock = self.ifblocks[-1]
@@ -426,6 +430,8 @@ class CppExpander:
                         self.context = ifblock.contexts[False]
                     elif isinstance(ifblock, CppExpander.DeterminedIfBlock):
                         self.in_unreachable_block = (determined == True)
+
+                    if ifblock.no_output:
                         no_output = True
 
                 elif isinstance(line, CppDirective.Endif):
@@ -448,6 +454,8 @@ class CppExpander:
 
                     elif isinstance(ifblock, CppExpander.DeterminedIfBlock):
                         self.in_unreachable_block = False  # because DeterminedIfBlock does not appear in unreachable block
+
+                    if ifblock.no_output:
                         no_output = True
 
                 if self.in_unreachable_block:
@@ -455,6 +463,8 @@ class CppExpander:
 
                 if isinstance(line, CppDirective.Define):
                     self.context.define(line.identifier)
+                    if line.identifier == directive_translator._include_guard_macro_name:
+                        no_output = True
 
                 elif isinstance(line, CppDirective.Undef):
                     self.context.undef(line.identifier)
