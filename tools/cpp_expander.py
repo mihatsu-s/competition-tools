@@ -17,12 +17,17 @@ class CppLineReader:
     def __iter__(self):
         yield from self()
 
+    class LineInfo:
+        def __init__(self, raw="", code=""):
+            self.raw = raw
+            self.code = code
+
     _re_linebreak = re.compile(r'^\\\s*$')
 
     def __call__(self):
         in_string = False
         in_block_comment = False
-        code = ""
+        lineinfo = CppLineReader.LineInfo()
         for line in self.source:
             skipping = 0
             continue_to_next_line = False
@@ -32,12 +37,12 @@ class CppLineReader:
                 elif in_string:
                     if line[p:p+2] == r'\"':
                         skipping = 1
-                        code += line[p:p+2]
+                        lineinfo.code += line[p:p+2]
                     elif line[p] == '"':
                         in_string = False
-                        code += line[p]
+                        lineinfo.code += line[p]
                     else:
-                        code += line[p]
+                        lineinfo.code += line[p]
                 elif in_block_comment:
                     if line[p:p+2] == "*/":
                         skipping = 1
@@ -45,7 +50,7 @@ class CppLineReader:
                 else:
                     if line[p] == '"':
                         in_string = True
-                        code += line[p]
+                        lineinfo.code += line[p]
                     elif line[p:p+2] == "/*":
                         skipping = 1
                         in_block_comment = True
@@ -56,14 +61,15 @@ class CppLineReader:
                         break
                     else:
                         if not line[p] in "\r\n":
-                            code += line[p]
+                            lineinfo.code += line[p]
 
+            lineinfo.raw += line
             if not in_block_comment and not continue_to_next_line:
-                yield code
-                code = ""
+                yield lineinfo
+                lineinfo = CppLineReader.LineInfo()
 
-        if code != "":
-            yield code
+        if lineinfo.raw != "":
+            yield lineinfo
 
 
 class CppDirective:
@@ -220,72 +226,88 @@ class CppDirective:
 class CppDirectiveTranslator:
     """ `#elif` -> `#else` + `#if` and so on """
 
-    def __init__(self, codelines: Iterable[str], path: Optional[Path] = None):
+    def __init__(self, codelines: Iterable[CppLineReader.LineInfo], path: Optional[Path] = None):
         self.codelines = codelines
         self.path = path
 
         self._ifblocks: List[CppDirectiveTranslator.IfBlock] = []
-        self._include_guard_macro_name: Optional[str] = None
+        self._include_guard_emulation = False
 
     def __iter__(self):
         yield from self()
+
+    class LineInfo:
+        def __init__(self, text: CppLineReader.LineInfo, directive: Optional[CppDirective.Base] = None):
+            self.text = text
+            self.directive = directive
 
     class IfBlock:
         def __init__(self):
             self.endif_duplication = 0
 
+    @staticmethod
+    def _directive_line(directive: CppDirective.Base, delete_raw_text = False):
+        return CppDirectiveTranslator.LineInfo(
+            text=CppLineReader.LineInfo(
+                raw=str(directive) if not delete_raw_text else "",
+                code=str(directive)
+            ),
+            directive=directive
+        )
+
     _re_ifdef = re.compile(r'^[\(\s]*(!|)[\(\s]*defined\s*\(\s*([^\s\)]+)[\s\)]*$')
 
     def __call__(self):
         for line in self.codelines:
-            directive = CppDirective.parse(line)
-            if directive is None:
-                yield line
+            res = CppDirectiveTranslator.LineInfo(line, CppDirective.parse(line.code))
+            if res.directive is None:
+                yield res
                 continue
 
             #  #elif -> #else + #if
-            if isinstance(directive, CppDirective.IfLike):
+            if isinstance(res.directive, CppDirective.IfLike):
                 self._ifblocks.append(CppDirectiveTranslator.IfBlock())
 
-            elif isinstance(directive, CppDirective.Elif):
+            elif isinstance(res.directive, CppDirective.Elif):
                 if len(self._ifblocks) == 0:
                     raise ValueError("#elif without #if")
-                yield CppDirective.Else()
-                directive = CppDirective.If(directive.expression)
+                yield CppDirectiveTranslator._directive_line(CppDirective.Else())
+                res = CppDirectiveTranslator._directive_line(CppDirective.If(res.directive.expression))
                 self._ifblocks[-1].endif_duplication += 1
 
-            elif isinstance(directive, CppDirective.Else):
+            elif isinstance(res.directive, CppDirective.Else):
                 if len(self._ifblocks) == 0:
                     raise ValueError("#else without #if")
 
-            elif isinstance(directive, CppDirective.Endif):
+            elif isinstance(res.directive, CppDirective.Endif):
                 if len(self._ifblocks) == 0:
                     raise ValueError("#endif without #if")
                 for _ in range(self._ifblocks[-1].endif_duplication):
-                    yield CppDirective.Endif()
+                    yield CppDirectiveTranslator._directive_line(CppDirective.Endif())
                 self._ifblocks.pop()
 
             #  #if defined -> #ifdef
-            if isinstance(directive, CppDirective.If):
-                match_ifdef = CppDirectiveTranslator._re_ifdef.match(directive.expression)
+            if isinstance(res.directive, CppDirective.If):
+                match_ifdef = CppDirectiveTranslator._re_ifdef.match(res.directive.expression)
                 if match_ifdef is not None:
                     if match_ifdef[1] == "!":
-                        directive = CppDirective.Ifndef(match_ifdef[2])
+                        res = CppDirectiveTranslator._directive_line(CppDirective.Ifndef(match_ifdef[2]))
                     else:
-                        directive = CppDirective.Ifdef(match_ifdef[2])
+                        res = CppDirectiveTranslator._directive_line(CppDirective.Ifdef(match_ifdef[2]))
 
             #  #pragma once -> (include guard by macro)
-            if isinstance(directive, CppDirective.Pragma) and directive.command == "once":
+            if isinstance(res.directive, CppDirective.Pragma) and res.directive.command == "once":
                 if len(self._ifblocks) == 0:  # not in #if block
-                    if not self._include_guard_macro_name and self.path:
-                        self._include_guard_macro_name = "_CPPEXPANDER_" + sha256(str(self.path).encode()).hexdigest()[:16].upper()
-                        yield CppDirective.Ifndef(self._include_guard_macro_name)
-                        directive = CppDirective.Define(self._include_guard_macro_name, [], "")
+                    if not self._include_guard_emulation and self.path:
+                        macro_name = "_CPPEXPANDER_" + sha256(str(self.path).encode()).hexdigest()[:16].upper()
+                        yield CppDirectiveTranslator._directive_line(CppDirective.Ifndef(macro_name), True)
+                        res = CppDirectiveTranslator._directive_line(CppDirective.Define(macro_name, [], ""), True)
+                        self._include_guard_emulation = True
 
-            yield directive
+            yield res
 
-        if self._include_guard_macro_name:
-            yield CppDirective.Endif()
+        if self._include_guard_emulation:
+            yield CppDirectiveTranslator._directive_line(CppDirective.Endif(), True)
 
 
 class MacroContext:
@@ -406,24 +428,21 @@ class CppExpander:
 
                 no_output = False
 
-                if isinstance(line, CppDirective.IfLike):
+                if isinstance(line.directive, CppDirective.IfLike):
                     if self.in_unreachable_block:
-                        self.ifblocks.append(CppExpander.IfBlock(line))  # no operation
+                        self.ifblocks.append(CppExpander.IfBlock(line.directive))  # no operation
                     else:
-                        determined = self.is_determined(line)
+                        determined = self.is_determined(line.directive)
                         if determined is not None:
-                            self.ifblocks.append(CppExpander.DeterminedIfBlock(line, determined))
+                            self.ifblocks.append(CppExpander.DeterminedIfBlock(line.directive, determined))
                             self.in_unreachable_block = (determined == False)
                             no_output = True
                         else:
-                            ifblock_undet = CppExpander.UndeterminedIfBlock(line, self.context)
+                            ifblock_undet = CppExpander.UndeterminedIfBlock(line.directive, self.context)
                             self.ifblocks.append(ifblock_undet)
                             self.context = ifblock_undet.contexts[True]
-                            if isinstance(line, CppDirective.Ifndef) and line.identifier == directive_translator._include_guard_macro_name:
-                                ifblock_undet.no_output = True
-                                no_output = True
 
-                elif isinstance(line, CppDirective.Else):
+                elif isinstance(line.directive, CppDirective.Else):
                     ifblock = self.ifblocks[-1]
                     ifblock.current = False
                     if isinstance(ifblock, CppExpander.UndeterminedIfBlock):
@@ -434,7 +453,7 @@ class CppExpander:
                     if ifblock.no_output:
                         no_output = True
 
-                elif isinstance(line, CppDirective.Endif):
+                elif isinstance(line.directive, CppDirective.Endif):
                     ifblock = self.ifblocks.pop()
 
                     if isinstance(ifblock, CppExpander.UndeterminedIfBlock):
@@ -461,24 +480,21 @@ class CppExpander:
                 if self.in_unreachable_block:
                     continue
 
-                if isinstance(line, CppDirective.Define):
-                    self.context.define(line.identifier)
-                    if line.identifier == directive_translator._include_guard_macro_name:
-                        no_output = True
+                if isinstance(line.directive, CppDirective.Define):
+                    self.context.define(line.directive.identifier)
 
-                elif isinstance(line, CppDirective.Undef):
-                    self.context.undef(line.identifier)
+                elif isinstance(line.directive, CppDirective.Undef):
+                    self.context.undef(line.directive.identifier)
 
-                elif isinstance(line, CppDirective.Include):
-                    if not (self.exclude_pattern and self.exclude_pattern.search(line.target)):
-                        target = self.resolve_include_path(line.target, source_path if line.quote else None)
+                elif isinstance(line.directive, CppDirective.Include):
+                    if not (self.exclude_pattern and self.exclude_pattern.search(line.directive.target)):
+                        target = self.resolve_include_path(line.directive.target, source_path if line.directive.quote else None)
                         if target is not None:
                             self.expand(target)
                             continue
 
                 if not no_output:
-                    self.outfile.write(str(line))
-                    self.outfile.write("\n")
+                    self.outfile.write(line.text.raw)
 
 
 def main():
