@@ -246,10 +246,10 @@ class CppDirectiveTranslator:
             self.endif_duplication = 0
 
     @staticmethod
-    def _directive_line(directive: CppDirective.Base, delete_raw_text = False):
+    def _directive_line(directive: CppDirective.Base):
         return CppDirectiveTranslator.LineInfo(
             text=CppLineReader.LineInfo(
-                raw=str(directive) if not delete_raw_text else "",
+                raw=str(directive) + "\n",
                 code=str(directive)
             ),
             directive=directive
@@ -300,14 +300,14 @@ class CppDirectiveTranslator:
                 if len(self._ifblocks) == 0:  # not in #if block
                     if not self._include_guard_emulation and self.path:
                         macro_name = "_CPPEXPANDER_" + sha256(str(self.path).encode()).hexdigest()[:16].upper()
-                        yield CppDirectiveTranslator._directive_line(CppDirective.Ifndef(macro_name), True)
-                        res = CppDirectiveTranslator._directive_line(CppDirective.Define(macro_name, [], ""), True)
+                        yield CppDirectiveTranslator._directive_line(CppDirective.Ifndef(macro_name))
+                        res = CppDirectiveTranslator._directive_line(CppDirective.Define(macro_name, [], ""))
                         self._include_guard_emulation = True
 
             yield res
 
         if self._include_guard_emulation:
-            yield CppDirectiveTranslator._directive_line(CppDirective.Endif(), True)
+            yield CppDirectiveTranslator._directive_line(CppDirective.Endif())
 
 
 class MacroContext:
