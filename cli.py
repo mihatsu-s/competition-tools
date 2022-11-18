@@ -24,12 +24,12 @@ _init_wd = os.getcwd()
 
 
 def set_cd_path(x: str):
-    with open(os.path.join(_init_wd, "__cd"), "w") as f:
+    with open(os.path.join(_init_wd, "__cd"), "w", encoding="utf-8") as f:
         f.write(x)
 
 
 def set_rm_path(x: str, directory=_init_wd):
-    with open(os.path.join(directory, "__rm"), "w") as f:
+    with open(os.path.join(directory, "__rm"), "w", encoding="utf-8") as f:
         f.write(x)
 
 
@@ -101,7 +101,7 @@ def generate(x: str):
 def generate_contest(contest_name: str, envs: List[Env], opening=False, auto_naming=False):
     os.mkdir(contest_name)
     os.chdir(contest_name)
-    with open(".contest", "w") as f:
+    with open(".contest", "w", encoding="utf-8") as f:
         f.write(contest_name)
     if auto_naming:
         for i, env in enumerate(envs):
@@ -176,7 +176,7 @@ def colon(*args):
     if not is_task_directory():
         raise RuntimeError("You are not in problem directory.")
     s = ""
-    with open(".problem") as f:
+    with open(".problem", encoding="utf-8") as f:
         s = f.readline()  # next problem name
     if len(s):
         go_to(s)

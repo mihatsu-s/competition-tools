@@ -106,13 +106,13 @@ _submit_force: {submitted_file}
                 os.mkdir(directory)
             os.chdir(directory)
 
-        with open("Makefile", "w") as f:
+        with open("Makefile", "w", encoding="utf-8") as f:
             f.write(self.generate_makefile())
-        with open(self.source_filename(), "w") as f:
+        with open(self.source_filename(), "w", encoding="utf-8") as f:
             f.write(self.source_template())
         if self.problem_url:
             subprocess.run(["oj", "download", self.problem_url])
-        with open(".problem", "w") as f:
+        with open(".problem", "w", encoding="utf-8") as f:
             f.write(memo)
         
         if opening:
