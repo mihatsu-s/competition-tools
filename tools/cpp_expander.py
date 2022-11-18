@@ -422,7 +422,7 @@ class CppExpander:
         return self.expand(self.source_path)
 
     def expand(self, source_path: Path):
-        with open(source_path, "r") as source:
+        with open(source_path, "r", encoding="utf-8") as source:
             directive_translator = CppDirectiveTranslator(CppLineReader(source), source_path)
             for line in directive_translator():
 
@@ -507,7 +507,7 @@ def main():
     if args.out is None:
         CppExpander(args.file, sys.stdout, args.exclude)()
     else:
-        with open(args.out, "w") as outfile:
+        with open(args.out, "w", encoding="utf-8") as outfile:
             CppExpander(args.file, outfile, args.exclude)()
 
 
